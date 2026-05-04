@@ -2,7 +2,7 @@
   "expo": {
     "name": "Locked In",
     "slug": "locked-in",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -32,7 +32,16 @@
       }
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#34C759",
+          "defaultChannel": "default"
+        }
+      ]
     ]
   }
 }

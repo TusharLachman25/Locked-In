@@ -34,7 +34,7 @@ export default function Auth() {
     }
 
     let imageResult = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.5,
@@ -58,20 +58,29 @@ export default function Auth() {
       } else {
         if (!username || !displayName) throw new Error("Please provide a name and username to get Locked In.");
 
+        const cleanUsername = username.toLowerCase().trim();
+        const cleanDisplayName = displayName.trim();
+
         const { data, error } = await supabase.auth.signUp({ 
           email, 
           password,
           options: {
             data: {
-              username: username.toLowerCase().trim(),
-              display_name: displayName,
+              username: cleanUsername,
+              display_name: cleanDisplayName,
             }
           }
         });
 
         if (error) throw error;
+        if (!data.user) throw new Error("Signup didn't return a user. Try again.");
 
-        if (data.session && avatarUri) {
+        // Upload the avatar first (if any) so we can save the URL with the rest of the profile.
+        // Email confirmation is OFF, so data.session exists here and RLS will allow the writes.
+        let avatarPublicUrl: string | null = null;
+
+        if (avatarUri && data.session) {
+          try {
             let base64 = '';
             if (Platform.OS === 'web') {
               const response = await fetch(avatarUri);
@@ -85,19 +94,46 @@ export default function Auth() {
               base64 = await FileSystem.readAsStringAsync(avatarUri, { encoding: 'base64' });
             }
 
-            if (base64 && data.user) {
+            if (base64) {
               const filePath = `${data.user.id}/${Date.now()}.png`;
-              const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, decode(base64), { contentType: 'image/png' });
-              
+              const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(filePath, decode(base64), { contentType: 'image/png' });
+
               if (!uploadError) {
                 const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(filePath);
-                await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', data.user.id);
+                avatarPublicUrl = publicUrl;
+              } else {
+                console.warn('Avatar upload failed:', uploadError);
               }
             }
+          } catch (uploadErr) {
+            console.warn('Avatar processing failed:', uploadErr);
+            // Don't fail the whole signup just because the avatar didn't upload
+          }
+        }
+
+        // Write the profile row. Upsert handles both cases:
+        //   - Row already exists (created by a handle_new_user trigger) → update it
+        //   - Row doesn't exist → insert it
+        const profileFields: Record<string, any> = {
+          id: data.user.id,
+          username: cleanUsername,
+          display_name: cleanDisplayName,
+        };
+        if (avatarPublicUrl) profileFields.avatar_url = avatarPublicUrl;
+
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .upsert(profileFields, { onConflict: 'id' });
+
+        if (profileError) {
+          // Surface this — if the profile write fails, the user will end up in a half-broken state
+          throw new Error(`Account created but profile setup failed: ${profileError.message}`);
         }
 
         if (!data.session) {
-          showAlert("You are Locked In! 🔒", "Check your email for the confirmation link. (You can upload your profile picture after you log in!)");
+          showAlert("You are Locked In! 🔒", "Check your email for the confirmation link.");
         }
       }
     } catch (err: any) {
@@ -123,10 +159,9 @@ export default function Auth() {
     >
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
-        {/* NEW BRANDING & LOGO SECTION */}
         <View style={styles.brandContainer}>
           <Image 
-            source={require('./assets/icon.png')} // <-- Matches your local asset file
+            source={require('./assets/icon.png')}
             style={styles.logoImage} 
           />
           <Text style={styles.brandTagline}>Sweat now, shine later.</Text>
@@ -201,7 +236,6 @@ export default function Auth() {
   );
 }
 
-// --- DYNAMIC STYLES ---
 const getStyles = (colors: any, theme: string) => StyleSheet.create({
   container: { 
     flex: 1, 
@@ -212,8 +246,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
   },
-  
-  // Brand Header
   brandContainer: {
     alignItems: 'center',
     marginBottom: 40,
@@ -222,7 +254,7 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
   logoImage: {
     width: 140,
     height: 140,
-    borderRadius: 24, // Gives the square logo smooth, app-icon style corners
+    borderRadius: 24,
     marginBottom: 10,
   },
   brandTagline: {
@@ -231,8 +263,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     marginTop: 4,
     fontWeight: '600',
   },
-
-  // Titles
   headerContainer: {
     marginBottom: 30,
   },
@@ -248,8 +278,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     color: colors.textMuted,
     lineHeight: 22,
   },
-  
-  // Avatar Styles
   avatarSection: {
     alignItems: 'center',
     marginBottom: 30,
@@ -289,8 +317,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     fontWeight: '600',
     color: colors.primary,
   },
-
-  // Form Styles
   formContainer: {
     marginBottom: 20,
   },
@@ -314,8 +340,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     color: colors.text,
     height: '100%',
   },
-
-  // Buttons
   primaryButton: {
     backgroundColor: colors.primary,
     height: 56,
@@ -329,8 +353,6 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
   },
-
-  // Footer
   footerContainer: {
     flexDirection: 'row',
     justifyContent: 'center',

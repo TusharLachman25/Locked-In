@@ -37,6 +37,9 @@ export default function ChatRoom({ route, navigation }: any) {
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
+  // Other participants of the room (everyone but me) along with their last_read_at.
+  // Used to render "Seen" indicators under my messages.
+  const [otherParticipants, setOtherParticipants] = useState<Array<{ user_id: string; last_read_at: string | null }>>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -59,18 +62,38 @@ export default function ChatRoom({ route, navigation }: any) {
 
   useEffect(() => {
     setupChat();
-    const channel = supabase.channel(`room:${roomId}`)
+    const messageChannel = supabase.channel(`room:${roomId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` },
         () => { fetchMessages(); markRoomAsRead(); }
       ).subscribe();
-    return () => { supabase.removeChannel(channel); };
+    // Realtime: when other participants update their last_read_at, refresh "Seen" status.
+    const participantsChannel = supabase.channel(`participants:${roomId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_participants', filter: `room_id=eq.${roomId}` },
+        () => { fetchOtherParticipants(); }
+      ).subscribe();
+    return () => {
+      supabase.removeChannel(messageChannel);
+      supabase.removeChannel(participantsChannel);
+    };
   }, [roomId]);
+
+  const fetchOtherParticipants = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from('chat_participants')
+      .select('user_id, last_read_at')
+      .eq('room_id', roomId)
+      .neq('user_id', user.id);
+    setOtherParticipants(data || []);
+  };
 
   const setupChat = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       setCurrentUserId(user.id);
       await fetchMessages();
+      await fetchOtherParticipants();
       await markRoomAsReadUser(user.id);
     }
   };
@@ -145,10 +168,32 @@ export default function ChatRoom({ route, navigation }: any) {
     } catch (error: any) { showAlert("Upload Failed", error.message); } finally { setUploadingImage(false); }
   };
 
+  // Determine the most recent of MY messages that any other participant has seen.
+  // For DMs this is straightforward. For groups, "Seen" appears once a single
+  // other participant has read past it — same as Instagram group DMs.
+  // Returns the message id, or null.
+  const lastSeenMessageId = useMemo(() => {
+    if (!currentUserId || messages.length === 0 || otherParticipants.length === 0) return null;
+    // Latest read time among other participants
+    const latestOtherRead = otherParticipants
+      .map(p => p.last_read_at ? new Date(p.last_read_at).getTime() : 0)
+      .reduce((a, b) => Math.max(a, b), 0);
+    if (latestOtherRead === 0) return null;
+    // Messages are stored newest-first (FlatList is inverted). Find the first
+    // (= most recent) message of mine that was created at or before that time.
+    for (const m of messages) {
+      if (m.sender_id === currentUserId && new Date(m.created_at).getTime() <= latestOtherRead) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [messages, otherParticipants, currentUserId]);
+
   const renderMessage = ({ item, index }: { item: any, index: number }) => {
     const isMe = item.sender_id === currentUserId;
     const hasWorkout = item.workout_id && item.workouts;
     const hasImage = !!item.image_url;
+    const showSeen = isMe && item.id === lastSeenMessageId;
 
     const olderMessage = messages[index + 1];
     const showDateSeparator = !olderMessage || new Date(item.created_at).toDateString() !== new Date(olderMessage.created_at).toDateString();
@@ -188,7 +233,7 @@ export default function ChatRoom({ route, navigation }: any) {
                   <Image source={{ uri: item.workouts.image_url }} style={styles.sharedImage} />
                   <View style={styles.sharedOverlay}>
                     <Text style={styles.sharedActivity}>{item.workouts.activity_type.toUpperCase()}</Text>
-                    <Text style={styles.sharedStats}>{item.workouts.duration_minutes}m</Text>
+                    <Text style={styles.sharedStats}>{item.workouts.duration_minutes} min</Text>
                   </View>
                 </View>
               )}
@@ -207,6 +252,9 @@ export default function ChatRoom({ route, navigation }: any) {
             </View>
           </Animated.View>
         </View>
+        {showSeen && (
+          <Text style={styles.seenIndicator}>Seen</Text>
+        )}
       </View>
     );
   };
@@ -277,6 +325,7 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
   
   messageBubble: { maxWidth: '75%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
   messageBubbleMe: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
+  seenIndicator: { fontSize: 11, color: colors.textMuted, alignSelf: 'flex-end', marginRight: 14, marginTop: 2, marginBottom: 4, fontWeight: '600' },
   messageBubbleThem: { backgroundColor: colors.surface, borderBottomLeftRadius: 4 },
   messageBubbleMedia: { paddingHorizontal: 4, paddingVertical: 4 }, 
 

@@ -2,9 +2,18 @@ import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
-// Get these from your Supabase Dashboard -> Project Settings -> API
-const supabaseUrl = 'https://YOUR_PROJECT_REF.supabase.co';
-const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
+// Read from environment. Expo automatically inlines any var prefixed with
+// EXPO_PUBLIC_ at build time, on both native and web.
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error(
+    'Missing Supabase env vars. Make sure EXPO_PUBLIC_SUPABASE_URL and ' +
+    'EXPO_PUBLIC_SUPABASE_ANON_KEY are set in your .env file (locally) and ' +
+    'in your Vercel project settings (for the web build).'
+  );
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

@@ -4,13 +4,21 @@ import {
   Image, FlatList, ActivityIndicator 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from './supabase';
-import { useTheme } from './ThemeContext'; // <-- THEME INJECTED
+import { useTheme } from './ThemeContext';
+
+// Escape characters that have special meaning in PostgREST filter strings.
+// Without this, a user typing `,foo.eq.bar` could break out of the ilike filter.
+const escapeForPostgrest = (value: string) => {
+  return value.replace(/[%_,()*]/g, (ch) => `\\${ch}`);
+};
 
 export default function Search() {
   const { colors, theme } = useTheme();
   const styles = useMemo(() => getStyles(colors, theme), [colors, theme]);
+  const navigation = useNavigation<any>();
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,7 +51,10 @@ export default function Search() {
 
     try {
       let query = supabase.from('profiles').select('id, username, display_name, avatar_url').neq('id', userId).limit(20);
-      if (text.trim() !== '') query = query.or(`username.ilike.%${text}%,display_name.ilike.%${text}%`);
+      if (text.trim() !== '') {
+        const safe = escapeForPostgrest(text.trim());
+        query = query.or(`username.ilike.%${safe}%,display_name.ilike.%${safe}%`);
+      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -67,7 +78,11 @@ export default function Search() {
   const renderItem = ({ item }: { item: any }) => {
     const isFollowing = followingIds.includes(item.id);
     return (
-      <View style={styles.userCard}>
+      <TouchableOpacity
+        style={styles.userCard}
+        activeOpacity={0.7}
+        onPress={() => navigation.navigate('UserProfile', { userId: item.id })}
+      >
         <Image source={{ uri: item.avatar_url || 'https://via.placeholder.com/150' }} style={styles.avatar} />
         <View style={styles.userInfo}>
           <Text style={styles.displayName}>{item.display_name || item.username}</Text>
@@ -76,7 +91,7 @@ export default function Search() {
         <TouchableOpacity style={[styles.followBtn, isFollowing && styles.followingBtn]} onPress={() => toggleFollow(item.id)}>
           <Text style={[styles.followBtnText, isFollowing && styles.followingBtnText]}>{isFollowing ? 'Following' : 'Follow'}</Text>
         </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
     );
   };
 

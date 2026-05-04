@@ -1,29 +1,232 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { supabase, sendPushNotification } from './supabase'; 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { 
   View, Text, TextInput, Image, StyleSheet, Alert, 
   TouchableOpacity, ScrollView, ActivityIndicator 
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { captureRef } from 'react-native-view-shot';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from './ThemeContext'; // <-- THEME BRAIN
+import { useFocusEffect } from '@react-navigation/native';
   // 1. Add this import at the top if not there
 import { Platform } from 'react-native';
 import { useCustomAlert } from './AlertContext';
 
-const ACTIVITY_CONFIG: Record<string, { fields: string[], image: string }> = {
-  'Gym': { fields: ['Duration', 'Calories', 'Focus'], image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=1000&auto=format&fit=crop' },
-  'Swim': { fields: ['Distance', 'Duration', 'Avg Pace', 'SWOLF', 'Calories'], image: 'https://images.unsplash.com/photo-1519315901367-f34f92240570?q=80&w=1000&auto=format&fit=crop' },
-  'Padel': { fields: ['Duration', 'Calories', 'Match Score'], image: 'https://images.unsplash.com/photo-1628124978864-46ab9707db0a?q=80&w=1000&auto=format&fit=crop' },
-  'Badminton': { fields: ['Duration', 'Calories'], image: 'https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?q=80&w=1000&auto=format&fit=crop' },
-  'Table Tennis': { fields: ['Duration', 'Calories', 'Match Score'], image: 'https://images.unsplash.com/photo-1609710228159-0fa9bd7c0827?q=80&w=1000&auto=format&fit=crop' },
-  'Running': { fields: ['Distance', 'Duration', 'Avg Pace', 'Calories'], image: 'https://images.unsplash.com/photo-1502281286595-bb0e271500f4?q=80&w=1000&auto=format&fit=crop' },
-  'Football (Competitive)': { fields: ['Duration', 'Calories', 'Goals'], image: 'https://images.unsplash.com/photo-1518605368461-1ee7e53f18ea?q=80&w=1000&auto=format&fit=crop' },
-  'Football (Casual)': { fields: ['Duration', 'Calories', 'Goals'], image: 'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?q=80&w=1000&auto=format&fit=crop' },
-  'Stretching': { fields: ['Duration'], image: 'https://images.unsplash.com/photo-1552604617-eea22a00c6d7?q=80&w=1000&auto=format&fit=crop' }
+// Default background images live in Supabase Storage at:
+//   /default-backgrounds/{slug}-{n}.jpeg   (n = 1..8)
+// Each activity has 8 portrait variants. Building the array from a slug keeps the
+// config tiny and makes adding more variants a one-line change.
+const SUPABASE_BG_URL = 'https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/public/default-backgrounds';
+const IMAGES_PER_ACTIVITY = 8;
+
+const ACTIVITY_SLUG: Record<string, string> = {
+  'Gym': 'gym',
+  'Swim': 'swim',
+  'Padel': 'padel',
+  'Badminton': 'badminton',
+  'Table Tennis': 'tt',
+  'Running': 'running',
+  'Football (Competitive)': 'football-comp',
+  'Football (Casual)': 'football-casual',
+  'Stretching': 'stretch',
+  'Cricket': 'cricket',
+  'Volleyball': 'volley',
+  'Beach Volleyball': 'beach-volley',
 };
+
+const buildImageList = (slug: string): string[] =>
+  Array.from({ length: IMAGES_PER_ACTIVITY }, (_, i) =>
+    `${SUPABASE_BG_URL}/${slug}-${i + 1}.jpeg`
+  );
+
+const ACTIVITY_IMAGES: Record<string, string[]> = Object.fromEntries(
+  Object.entries(ACTIVITY_SLUG).map(([activity, slug]) => [activity, buildImageList(slug)])
+);
+
+const ACTIVITY_EMOJI: Record<string, string> = {
+  'Gym': '🏋️',
+  'Running': '🏃',
+  'Swim': '🏊',
+  'Padel': '🎾',
+  'Badminton': '🏸',
+  'Table Tennis': '🏓',
+  'Football (Competitive)': '⚽',
+  'Football (Casual)': '⚽',
+  'Stretching': '🧘',
+  'Cricket': '🏏',
+  'Volleyball': '🏐',
+  'Beach Volleyball': '🏖️',
+};
+
+const ACTIVITY_CONFIG: Record<string, { fields: string[] }> = {
+  'Gym': { fields: ['Duration', 'Calories', 'Focus'] },
+  'Swim': { fields: ['Distance', 'Duration', 'Avg Pace', 'SWOLF', 'Calories'] },
+  'Padel': { fields: ['Duration', 'Calories', 'Match Score'] },
+  'Badminton': { fields: ['Duration', 'Calories'] },
+  'Table Tennis': { fields: ['Duration', 'Calories', 'Match Score'] },
+  'Running': { fields: ['Distance', 'Duration', 'Avg Pace', 'Calories'] },
+  'Football (Competitive)': { fields: ['Duration', 'Calories', 'Goals'] },
+  'Football (Casual)': { fields: ['Duration', 'Calories', 'Goals'] },
+  'Stretching': { fields: ['Duration'] },
+  'Cricket': { fields: ['Duration', 'Calories', 'Runs', 'Wickets'] },
+  'Volleyball': { fields: ['Duration', 'Calories', 'Match Score'] },
+  'Beach Volleyball': { fields: ['Duration', 'Calories', 'Match Score'] },
+};
+
+// Which field is required per activity to compute points.
+// Must match calculatePoints in Feed.tsx — Swim/Running use distance, everything else uses duration.
+const REQUIRED_FIELD: Record<string, 'Distance' | 'Duration'> = {
+  'Swim': 'Distance',
+  'Running': 'Distance',
+  'Gym': 'Duration',
+  'Padel': 'Duration',
+  'Badminton': 'Duration',
+  'Table Tennis': 'Duration',
+  'Football (Competitive)': 'Duration',
+  'Football (Casual)': 'Duration',
+  'Stretching': 'Duration',
+  'Cricket': 'Duration',
+  'Volleyball': 'Duration',
+  'Beach Volleyball': 'Duration',
+};
+
+// Units shown next to each field. Distance unit varies by activity (m for swim, km for run).
+// Duration is always in minutes (we use "min" everywhere to avoid confusion with meters).
+const UNITS: Record<string, Record<string, string>> = {
+  'Gym':                   { Duration: 'min', Calories: 'kcal' },
+  'Swim':                  { Distance: 'm',   Duration: 'min', 'Avg Pace': '/100m', Calories: 'kcal' },
+  'Padel':                 { Duration: 'min', Calories: 'kcal' },
+  'Badminton':             { Duration: 'min', Calories: 'kcal' },
+  'Table Tennis':          { Duration: 'min', Calories: 'kcal' },
+  'Running':               { Distance: 'km',  Duration: 'min', 'Avg Pace': '/km', Calories: 'kcal' },
+  'Football (Competitive)':{ Duration: 'min', Calories: 'kcal' },
+  'Football (Casual)':     { Duration: 'min', Calories: 'kcal' },
+  'Stretching':            { Duration: 'min' },
+  'Cricket':               { Duration: 'min', Calories: 'kcal' },
+  'Volleyball':            { Duration: 'min', Calories: 'kcal' },
+  'Beach Volleyball':      { Duration: 'min', Calories: 'kcal' },
+};
+
+// Helper: get unit for a field in the current activity, or empty string if none.
+const unitFor = (activity: string, field: string) => UNITS[activity]?.[field] || '';
+
+// Helper: convert a string of any length to a base64 string in the browser.
+// Equivalent of decode(base64) on native — produces an ArrayBuffer ready for upload.
+const dataUrlToBase64 = (dataUrl: string) => {
+  // dataUrl looks like "data:image/png;base64,iVBORw0..."
+  return dataUrl.split(',')[1] || '';
+};
+
+// Web-only compositor. Loads the background, draws the overlay (header, stats grid,
+// notes) onto an off-screen <canvas>, returns a base64 PNG. Replaces what
+// captureRef does on native.
+async function composeOnWeb(opts: {
+  bgUrl: string;
+  activity: string;
+  fields: string[];
+  values: Record<string, string>;
+  notes: string;
+  unitFor: (activity: string, field: string) => string;
+  primaryColor: string;
+}): Promise<string> {
+  const { bgUrl, activity, fields, values, notes, unitFor: getUnit, primaryColor } = opts;
+
+  // Load the background image with CORS enabled (Unsplash supports it).
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new window.Image();
+    i.crossOrigin = 'anonymous';
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Failed to load background image'));
+    i.src = bgUrl;
+  });
+
+  // Render at 1080x1920 — story aspect ratio, high resolution for crisp display.
+  const W = 1080;
+  const H = 1920;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get 2D context');
+
+  // Draw the background image with object-fit: cover behavior
+  const ratio = Math.max(W / img.width, H / img.height);
+  const drawW = img.width * ratio;
+  const drawH = img.height * ratio;
+  const dx = (W - drawW) / 2;
+  const dy = (H - drawH) / 2;
+  ctx.drawImage(img, dx, dy, drawW, drawH);
+
+  // Dark overlay tint (matches the rgba(0,0,0,0.4) in the on-screen preview)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Header: activity name (top-left) + SQUAD brand (top-right)
+  const PADDING = 70;
+  ctx.fillStyle = '#fff';
+  ctx.font = '800 56px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillText(activity.toUpperCase(), PADDING, PADDING);
+
+  ctx.fillStyle = primaryColor;
+  ctx.font = '800 48px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('SQUAD', W - PADDING, PADDING);
+
+  // Stats grid in the lower portion. Only fields with values, just like the live overlay.
+  const filledFields = fields.filter(f => (values[f] || '').trim() !== '');
+
+  // 2-column grid laid out from the bottom up.
+  const COL_W = (W - PADDING * 2) / 2;
+  const ROW_H = 170;
+  const gridStartY = H - PADDING - (notes ? 220 : 80) - Math.ceil(filledFields.length / 2) * ROW_H;
+
+  ctx.textAlign = 'left';
+  filledFields.forEach((field, idx) => {
+    const col = idx % 2;
+    const row = Math.floor(idx / 2);
+    const x = PADDING + col * COL_W;
+    const y = gridStartY + row * ROW_H;
+
+    const value = values[field].trim();
+    const unit = getUnit(activity, field);
+    const displayValue = unit && !value.toLowerCase().includes(unit.toLowerCase())
+      ? `${value} ${unit}`
+      : value;
+
+    // Title (small, semi-transparent white, uppercase)
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '600 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillText(field.toUpperCase(), x, y);
+
+    // Value (large, white, bold)
+    ctx.fillStyle = '#fff';
+    ctx.font = '800 76px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillText(displayValue, x, y + 48);
+  });
+
+  // Notes block (italic, with a colored left border)
+  if (notes) {
+    const notesY = H - PADDING - 100;
+    const borderX = PADDING;
+    const textX = PADDING + 24;
+    ctx.fillStyle = primaryColor;
+    ctx.fillRect(borderX, notesY, 8, 70);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'italic 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    // Truncate notes if absurdly long; canvas doesn't word-wrap.
+    const maxChars = 60;
+    const displayNotes = notes.length > maxChars ? notes.slice(0, maxChars - 1) + '…' : notes;
+    ctx.fillText(`"${displayNotes}"`, textX, notesY + 18);
+  }
+
+  return canvas.toDataURL('image/png');
+}
 
 
 
@@ -41,7 +244,28 @@ export default function CreatePost({ navigation }: any) {
   
   const [isExtracting, setIsExtracting] = useState(false);
   const [proofImage, setProofImage] = useState<string | null>(null);
+  const [isImageReady, setIsImageReady] = useState(false);
+  const [activitySearch, setActivitySearch] = useState('');
   const imageRef = useRef<View>(null);
+
+  // Random background per activity. Re-picked every time the screen comes into focus,
+  // so the user gets a fresh visual every time they open the create-post tab.
+  const pickRandomImages = (): Record<string, string> => {
+    const result: Record<string, string> = {};
+    for (const act of Object.keys(ACTIVITY_IMAGES)) {
+      const pool = ACTIVITY_IMAGES[act];
+      result[act] = pool[Math.floor(Math.random() * pool.length)];
+    }
+    return result;
+  };
+  const [randomImages, setRandomImages] = useState<Record<string, string>>(pickRandomImages);
+
+  useFocusEffect(
+    useCallback(() => {
+      setRandomImages(pickRandomImages());
+      setIsImageReady(false);
+    }, [])
+  );
 
   // --- NEW: DATE & TIME STATE (MUST BE INSIDE THE FUNCTION) ---
   const now = new Date();
@@ -63,11 +287,12 @@ export default function CreatePost({ navigation }: any) {
     if (!result.granted) return showAlert("Gallery permission required!");
 
     let imageResult = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      mediaTypes: ['images'],
       allowsEditing: true, aspect: [1, 1], quality: 0.8, base64: true,
     });
 
     if (!imageResult.canceled) {
+      setIsImageReady(false);
       setProofImage(imageResult.assets[0].uri);
       setFormValues({});
       
@@ -79,7 +304,12 @@ export default function CreatePost({ navigation }: any) {
 
   const extractDataWithGemini = async (base64Image: string) => {
       setIsExtracting(true);
-      const GEMINI_API_KEY = 'REDACTED_API_KEY_USE_ENV_VAR'; 
+      const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+      if (!GEMINI_API_KEY) {
+          showAlert("Configuration Error", "Gemini API key is not set. Add EXPO_PUBLIC_GEMINI_API_KEY to your env.");
+          setIsExtracting(false);
+          return;
+      }
       const prompt = `Analyze this workout summary screenshot. Extract the data and return ONLY a raw JSON object. Do not include any formatting, markdown, or conversational text. The JSON keys must be exactly: "activity", "Distance", "Duration", "Avg Pace", "Calories", "SWOLF". For "activity", guess the best match from this list based on the image: Gym, Swim, Padel, Badminton, Table Tennis, Running, Football (Competitive), Football (Casual), Stretching. If unsure, use "Gym". If a value is not visible, use an empty string "". CRITICAL INSTRUCTIONS: For "Duration", convert the time into TOTAL MINUTES as a plain number string (e.g., "2:00:28" becomes "120"). For "Calories", provide ONLY the raw number without commas or units (e.g., "1,364 kcal" becomes "1364"). Example output: {"activity": "Running", "Distance": "5.0 km", "Duration": "25", "Avg Pace": "5'00\"", "Calories": "300", "SWOLF": ""}`;
 
       try {
@@ -117,20 +347,87 @@ export default function CreatePost({ navigation }: any) {
 const handlePost = async () => {
   try {
     if (!proofImage && mode === 'existing') return showAlert("Hold up", "Upload a screenshot first.");
-    
+
+    // For manual posts, enforce that the field needed to calculate points is filled in.
+    // The screenshot-upload mode is exempt — Gemini extracts those values from the image.
+    if (mode === 'custom') {
+      const requiredField = REQUIRED_FIELD[activity];
+      const rawValue = (formValues[requiredField] || '').trim();
+      const numericValue = parseFloat(rawValue.replace(/[^0-9.]/g, ''));
+      if (!rawValue || isNaN(numericValue) || numericValue <= 0) {
+        return showAlert(
+          "Missing info",
+          `${activity} posts need a valid ${requiredField.toLowerCase()} so we can calculate points.`
+        );
+      }
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return showAlert("Error", "You must be logged in.");
 
-    let finalImageUri = proofImage || ACTIVITY_CONFIG[activity].image;
+    let finalImageUri = proofImage || randomImages[activity];
+    // On web, the canvas compositor produces base64 directly — skips fetch+FileReader.
+    let webComposedBase64: string | null = null;
 
-    // --- WEB SAFETY CHECK ---
-    if (mode === 'custom' && Platform.OS !== 'web') {
-      finalImageUri = await captureRef(imageRef, { format: 'png', quality: 1 });
+    // For custom (non-screenshot) posts, bake the overlay into the image.
+    if (mode === 'custom') {
+      if (Platform.OS === 'web') {
+        // Web path: use HTML5 canvas to composite background + overlay text.
+        // captureRef doesn't work on web (findNodeHandle isn't supported), so we
+        // do the drawing manually with the same look as the on-screen preview.
+        try {
+          const dataUrl = await composeOnWeb({
+            bgUrl: finalImageUri,
+            activity,
+            fields: activeFields,
+            values: formValues,
+            notes,
+            unitFor,
+            primaryColor: colors.primary,
+          });
+          webComposedBase64 = dataUrlToBase64(dataUrl);
+          if (!webComposedBase64) throw new Error('Canvas produced empty output');
+        } catch (composeErr: any) {
+          console.error('Web compose failed:', composeErr);
+          return showAlert(
+            "Couldn't compose post",
+            composeErr?.message || "The overlay couldn't be rendered. Try again."
+          );
+        }
+      } else {
+        // Native path: capture the rendered preview view to a PNG.
+        if (!imageRef.current) {
+          return showAlert("Render error", "Preview isn't ready yet. Try again in a moment.");
+        }
+        if (!isImageReady) {
+          return showAlert("Hold on", "The background image is still loading. Try again in a second.");
+        }
+        try {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          const captured = await captureRef(imageRef, {
+            format: 'png',
+            quality: 1,
+            result: 'tmpfile',
+          });
+          if (!captured) throw new Error('captureRef returned empty');
+          finalImageUri = captured;
+        } catch (captureErr: any) {
+          console.error('captureRef failed:', captureErr);
+          return showAlert(
+            "Couldn't capture preview",
+            captureErr?.message || "The overlay couldn't be rendered. Try again."
+          );
+        }
+      }
     }
 
-    let base64: string = ''; // Initialize as an empty string with explicit type
+    let base64: string = '';
 
-    if (Platform.OS === 'web') {
+    if (webComposedBase64) {
+      // We already have it from the canvas compositor — no need to fetch.
+      base64 = webComposedBase64;
+    } else if (Platform.OS === 'web') {
+      // Screenshot-upload mode on web — fetch the image (which is a blob: URL from ImagePicker)
       const response = await fetch(finalImageUri);
       const blob = await response.blob();
       base64 = await new Promise<string>((resolve) => {
@@ -142,7 +439,7 @@ const handlePost = async () => {
         reader.readAsDataURL(blob);
       });
     } else {
-      // For Android (APK), use FileSystem
+      // Native: read the captured/picked image file directly
       base64 = await FileSystem.readAsStringAsync(finalImageUri, { encoding: 'base64' });
     }
 
@@ -171,15 +468,24 @@ const handlePost = async () => {
       if (!isNaN(parsedDate.getTime())) isoToSave = parsedDate.toISOString();
     } catch (e) { console.warn("Invalid date format, using now()"); }
 
+    // Persist distance with its unit (e.g. "5 km", "1500 m") so the leaderboard / chat /
+    // profile pages display it consistently. calculatePoints strips non-digits so this
+    // does not affect points scoring.
+    const rawDistance = (formValues['Distance'] || '').trim();
+    const distanceUnit = unitFor(activity, 'Distance');
+    const distanceToSave = rawDistance && distanceUnit && !rawDistance.toLowerCase().includes(distanceUnit)
+      ? `${rawDistance} ${distanceUnit}`
+      : rawDistance;
+
     const { error: dbError } = await supabase.from('workouts').insert({
         user_id: user.id, 
         activity_type: activity, 
         duration_minutes: durationInt, 
-        distance: formValues['Distance'] || '', 
+        distance: distanceToSave, 
         calories: calInt, 
         notes: notes, 
         image_url: publicUrl,
-        created_at: isoToSave // <-- Overrides the default database timestamp
+        created_at: isoToSave
     });
 
     if (dbError) throw dbError;
@@ -189,12 +495,13 @@ const handlePost = async () => {
 
   } catch (error: any) {
     console.error("Post Error:", error);
-    showAlert("Upload Failed", "Something went wrong saving your post.");
+    const detail = error?.message || error?.error_description || JSON.stringify(error)?.slice(0, 200) || 'unknown error';
+    showAlert("Upload Failed", detail);
   }
 };
 
   const activeFields = ACTIVITY_CONFIG[activity].fields;
-  const currentBgImage = proofImage || ACTIVITY_CONFIG[activity].image;
+  const currentBgImage = proofImage || randomImages[activity];
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
@@ -211,32 +518,70 @@ const handlePost = async () => {
       {mode === 'custom' ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>1. Select Activity</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                {ACTIVITIES.map(act => (
-                    <TouchableOpacity 
-                        key={act} 
-                        style={[styles.chip, activity === act && styles.chipActive]}
-                        onPress={() => { setActivity(act); setFormValues({}); }}
+
+            {/* Search filter — only filters when typed in */}
+            <View style={styles.activitySearchWrapper}>
+              <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.activitySearchInput}
+                placeholder="Search activities..."
+                placeholderTextColor={colors.textMuted}
+                value={activitySearch}
+                onChangeText={setActivitySearch}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {activitySearch.length > 0 && (
+                <TouchableOpacity onPress={() => setActivitySearch('')}>
+                  <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.activityGrid}>
+              {ACTIVITIES
+                .filter(act => activitySearch.trim() === '' || act.toLowerCase().includes(activitySearch.trim().toLowerCase()))
+                .map(act => {
+                  const isActive = activity === act;
+                  return (
+                    <TouchableOpacity
+                      key={act}
+                      style={[styles.activityTile, isActive && styles.activityTileActive]}
+                      onPress={() => { setActivity(act); setFormValues({}); setIsImageReady(false); setActivitySearch(''); }}
+                      activeOpacity={0.7}
                     >
-                        <Text style={[styles.chipText, activity === act && styles.chipTextActive]}>{act}</Text>
+                      <Text style={styles.activityEmoji}>{ACTIVITY_EMOJI[act] || '🏃'}</Text>
+                      <Text style={[styles.activityTileLabel, isActive && styles.activityTileLabelActive]} numberOfLines={2}>
+                        {act}
+                      </Text>
                     </TouchableOpacity>
-                ))}
-            </ScrollView>
+                  );
+                })}
+              {ACTIVITIES.filter(act => act.toLowerCase().includes(activitySearch.trim().toLowerCase())).length === 0 && (
+                <Text style={styles.activityNoResults}>No activities match "{activitySearch}"</Text>
+              )}
+            </View>
 
             <Text style={styles.sectionTitle}>2. Enter Details</Text>
             <View style={styles.dynamicGrid}>
-                {activeFields.map(field => (
-                    <View key={field} style={styles.inputWrapper}>
-                        <Text style={styles.inputLabel}>{field}</Text>
-                        <TextInput 
-                            style={styles.input} 
-                            placeholder={`0`} 
-                            placeholderTextColor={colors.textMuted}
-                            value={formValues[field] || ''}
-                            onChangeText={(val) => handleInputChange(field, val)}
-                        />
-                    </View>
-                ))}
+                {activeFields.map(field => {
+                    const isRequired = field === REQUIRED_FIELD[activity];
+                    const unit = unitFor(activity, field);
+                    return (
+                        <View key={field} style={styles.inputWrapper}>
+                            <Text style={styles.inputLabel}>
+                                {field}{unit ? ` (${unit})` : ''}{isRequired ? <Text style={{ color: colors.primary }}> *</Text> : null}
+                            </Text>
+                            <TextInput
+                                style={styles.input}
+                                placeholder={isRequired ? 'Required' : 'Optional'}
+                                placeholderTextColor={colors.textMuted}
+                                value={formValues[field] || ''}
+                                onChangeText={(val) => handleInputChange(field, val)}
+                            />
+                        </View>
+                    );
+                })}
             </View>
 
             <View style={{marginTop: 10}}>
@@ -249,8 +594,14 @@ const handlePost = async () => {
             </TouchableOpacity>
 
             <Text style={[styles.sectionTitle, {marginTop: 30}]}>Preview</Text>
-            <View ref={imageRef} style={styles.previewContainer} collapsable={false}>
-                <Image source={{ uri: currentBgImage }} style={styles.previewImage} />
+            <View style={styles.previewOuter}>
+              <View ref={imageRef} style={styles.previewContainer} collapsable={false}>
+                <Image
+                  source={{ uri: currentBgImage }}
+                  style={styles.previewImage}
+                  onLoad={() => setIsImageReady(true)}
+                  onError={() => setIsImageReady(false)}
+                />
                 
                 <View style={styles.overlay}>
                     <View style={styles.overlayHeader}>
@@ -260,16 +611,27 @@ const handlePost = async () => {
                     
                     <View style={styles.statsWrapper}>
                         <View style={styles.statsGrid}>
-                            {activeFields.map(field => (
-                                <View key={field} style={styles.gridItem}>
-                                    <Text style={styles.statTitle}>{field}</Text>
-                                    <Text style={styles.statValue}>{formValues[field] || '--'}</Text>
-                                </View>
-                            ))}
+                            {activeFields
+                              .filter(field => (formValues[field] || '').trim() !== '')
+                              .map(field => {
+                                const value = formValues[field].trim();
+                                const unit = unitFor(activity, field);
+                                // If the user typed the unit themselves (e.g. "5 km"), don't double it up.
+                                const displayValue = unit && !value.toLowerCase().includes(unit.toLowerCase())
+                                  ? `${value} ${unit}`
+                                  : value;
+                                return (
+                                  <View key={field} style={styles.gridItem}>
+                                      <Text style={styles.statTitle}>{field}</Text>
+                                      <Text style={styles.statValue}>{displayValue}</Text>
+                                  </View>
+                                );
+                            })}
                         </View>
                         {notes ? <Text style={styles.overlayNotes}>"{notes}"</Text> : null}
                     </View>
                 </View>
+              </View>
             </View>
           </View>
       ) : (
@@ -339,11 +701,35 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
   toggleText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
   toggleTextActive: { color: colors.background },
 
-  chipScroll: { paddingBottom: 10, marginBottom: 15 },
-  chip: { paddingHorizontal: 20, paddingVertical: 10, backgroundColor: colors.surface, borderRadius: 20, marginRight: 10 },
-  chipActive: { backgroundColor: colors.text },
-  chipText: { fontSize: 14, fontWeight: '600', color: colors.text },
-  chipTextActive: { color: colors.background },
+  // Activity picker (search + grid)
+  activitySearchWrapper: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12, paddingHorizontal: 14, height: 44,
+    marginBottom: 12,
+  },
+  activitySearchInput: { flex: 1, fontSize: 15, color: colors.text },
+  activityGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', marginBottom: 15, marginHorizontal: -4 },
+  activityTile: {
+    width: '31.333%',
+    aspectRatio: 1,
+    margin: '1%',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  activityTileActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  activityEmoji: { fontSize: 30, marginBottom: 6 },
+  activityTileLabel: { fontSize: 11, fontWeight: '600', color: colors.text, textAlign: 'center', lineHeight: 14 },
+  activityTileLabelActive: { color: colors.primary, fontWeight: '800' },
+  activityNoResults: { width: '100%', textAlign: 'center', color: colors.textMuted, paddingVertical: 30, fontSize: 14 },
 
   dynamicGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   inputWrapper: { width: '48%', marginBottom: 15 },
@@ -357,7 +743,8 @@ const getStyles = (colors: any, theme: string) => StyleSheet.create({
   postButton: { backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginTop: 20 },
   postButtonText: { color: '#fff', fontSize: 18, fontWeight: '800' },
 
-  previewContainer: { width: '100%', aspectRatio: 1, borderRadius: 16, overflow: 'hidden', position: 'relative', backgroundColor: '#000' },
+  previewOuter: { width: '100%', aspectRatio: 9 / 16, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000' },
+  previewContainer: { width: '100%', height: '100%', position: 'relative', backgroundColor: '#000' },
   previewImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', padding: 20, justifyContent: 'space-between' },
   overlayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
