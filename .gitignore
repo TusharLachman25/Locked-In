@@ -43,3 +43,5 @@ yarn-error.*
 .vercel
 
 .env
+# Video/demo generation output — large local render artifacts, not source.
+/brag-output*/

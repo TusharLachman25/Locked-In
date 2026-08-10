@@ -19,7 +19,9 @@ import { useCustomAlert } from './AlertContext';
 //   /default-backgrounds/{slug}-{n}.jpeg   (n = 1..8)
 // Each activity has 8 portrait variants. Building the array from a slug keeps the
 // config tiny and makes adding more variants a one-line change.
-const SUPABASE_BG_URL = 'https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/public/default-backgrounds';
+// Built off the same env var the client uses, rather than a second hardcoded
+// copy of the project URL — one place to change, and nothing to leak.
+const SUPABASE_BG_URL = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/storage/v1/object/public/default-backgrounds`;
 const IMAGES_PER_ACTIVITY = 8;
 
 const ACTIVITY_SLUG: Record<string, string> = {
