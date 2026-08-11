@@ -70,12 +70,6 @@ You will need [Node.js](https://nodejs.org) 18 or newer, a free
 [Google AI Studio](https://aistudio.google.com/apikey) key for the screenshot
 extraction.
 
-> **One step is missing, and it is the big one.** The database schema is not in
-> this repository — see [The schema](#the-schema) below for the honest reason
-> why. Until it is exported here, steps 1, 2, 4 and 5 will run but the app will
-> fail against an empty database. If you want to stand this up, open an issue
-> and I will export it.
-
 ### 1. Get the code
 
 ```bash
@@ -90,14 +84,32 @@ Sign in to Supabase, click **New project**, set a name, a database password and
 your nearest region. Provisioning takes a minute or two; the free tier is
 enough for a squad.
 
-### 3. Apply the schema — not yet possible
+### 3. Apply the schema
 
-The tables, the row-level security policies on every one of them, the Postgres
-triggers that fire push through `pg_net`, and the `supabase_realtime`
-publication membership all live in my Supabase project rather than in this
-repository. Recreating them by reading the client code would be guesswork, and a
-half-right schema is worse than none — so this step is a placeholder until the
-real dump is committed.
+Open **SQL Editor** in your new project, paste in the whole of
+[`supabase/schema.sql`](supabase/schema.sql), and run it. That is 12 tables,
+their foreign keys and indexes, 12 functions, the 6 triggers that fire push
+through `pg_net`, row-level security with 36 policies, and the three tables that
+belong to the `supabase_realtime` publication.
+
+It is ordered to run top to bottom in one go: tables first, then foreign keys as
+separate `alter table` statements so that the alphabetical order tables happen
+to be created in cannot matter, then functions before the triggers that call
+them, then the policies.
+
+The file is generated rather than hand-written —
+[`scripts/dump-schema.mjs`](scripts/dump-schema.mjs) reads the live project
+through the Supabase Management API and asks Postgres itself for the definitions
+via `pg_get_constraintdef`, `pg_get_indexdef`, `pg_get_triggerdef` and
+`pg_get_functiondef`. To regenerate it against your own project:
+
+```bash
+node scripts/dump-schema.mjs <token-file> <project-ref> > supabase/schema.sql
+```
+
+One caveat worth stating: this schema has been checked structurally but has not
+been replayed into an empty database end to end. If it fails on something, that
+is a bug worth an issue.
 
 ### 4. Fill in your keys
 
@@ -153,10 +165,14 @@ variables in your EAS project's environment before building — otherwise
 
 ## The schema
 
-The schema lives in the Supabase project rather than in this repository — it was
-built in the SQL editor as the app was written, which is the honest description
-of how a five-week project actually went. Two rules held it together once the
-first APK was on people's phones:
+The schema was built in the SQL editor as the app was written, rather than as
+checked-in migrations — which is the honest description of how a five-week
+project actually went. It is now exported to
+[`supabase/schema.sql`](supabase/schema.sql), but that export is a snapshot
+taken afterwards, not a migration history: it will recreate the database as it
+stands and tells you nothing about how it got there.
+
+Two rules held it together once the first APK was on people's phones:
 
 **Changes are additive.** Old APKs are already installed and will ignore a new
 column, but a rename or a drop breaks them. So nothing gets renamed once it has
