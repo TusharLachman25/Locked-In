@@ -246,7 +246,19 @@ if (rlsTables.length) {
 
 if (policies.length) {
   for (const p of policies) {
-    const roles = Array.isArray(p.roles) ? p.roles.join(', ') : p.roles;
+    // pg_policies.roles is a name[]. The Management API hands it back as the
+    // Postgres array *literal* — the string "{public}" — rather than as JSON,
+    // so passing it through unchanged emits `to {public}`, which is not valid
+    // SQL and quietly breaks every policy in the file.
+    const roles = (
+      Array.isArray(p.roles)
+        ? p.roles
+        : String(p.roles)
+            .replace(/^\{|\}$/g, '')
+            .split(',')
+            .map((r) => r.trim().replace(/^"|"$/g, ''))
+            .filter(Boolean)
+    ).join(', ');
     let s = `create policy "${p.name}" on public."${p.table_name}"`;
     s += `\n  as ${p.permissive === 'PERMISSIVE' ? 'permissive' : 'restrictive'}`;
     s += `\n  for ${p.cmd.toLowerCase()}`;

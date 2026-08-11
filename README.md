@@ -107,9 +107,23 @@ via `pg_get_constraintdef`, `pg_get_indexdef`, `pg_get_triggerdef` and
 node scripts/dump-schema.mjs <token-file> <project-ref> > supabase/schema.sql
 ```
 
-One caveat worth stating: this schema has been checked structurally but has not
-been replayed into an empty database end to end. If it fails on something, that
-is a bug worth an issue.
+It has been replayed into an empty database rather than eyeballed.
+[`scripts/validate-schema.mjs`](scripts/validate-schema.mjs) stands up a real
+Postgres in-process with [PGlite](https://pglite.dev), stubs the pieces Supabase
+provides that a bare Postgres does not — the `auth` schema, `net.http_post`, the
+`anon`/`authenticated` roles, the `supabase_realtime` publication — and runs the
+dump statement by statement:
+
+```bash
+npm install --no-save @electric-sql/pglite
+node scripts/validate-schema.mjs supabase/schema.sql
+```
+
+All 110 statements apply cleanly, and the rebuilt database comes back with the
+same 12 tables, 22 foreign keys, 36 policies, 6 triggers and 3 realtime tables
+as the project it was dumped from. That check is the only reason this file is
+worth trusting: the first draft put foreign keys inline and emitted `to {public}`
+for every policy, and both would have failed on the reader's first attempt.
 
 ### 4. Fill in your keys
 

@@ -547,37 +547,37 @@ alter table public."workouts" enable row level security;
 create policy "Users can add participants" on public."chat_participants"
   as permissive
   for insert
-  to {public}
+  to public
   with check (true);
 
 create policy "Users can update their own read status" on public."chat_participants"
   as permissive
   for update
-  to {public}
+  to public
   using ((user_id = auth.uid()));
 
 create policy "Users can view participants of their rooms" on public."chat_participants"
   as permissive
   for select
-  to {public}
+  to public
   using ((room_id IN ( SELECT get_my_chat_rooms() AS get_my_chat_rooms)));
 
 create policy "Creators can view their own rooms" on public."chat_rooms"
   as permissive
   for select
-  to {public}
+  to public
   using ((auth.uid() = created_by));
 
 create policy "Users can create rooms" on public."chat_rooms"
   as permissive
   for insert
-  to {public}
+  to public
   with check (true);
 
 create policy "Users can delete rooms they are in" on public."chat_rooms"
   as permissive
   for delete
-  to {public}
+  to public
   using ((EXISTS ( SELECT 1
    FROM chat_participants
   WHERE ((chat_participants.room_id = chat_rooms.id) AND (chat_participants.user_id = auth.uid())))));
@@ -585,7 +585,7 @@ create policy "Users can delete rooms they are in" on public."chat_rooms"
 create policy "Users can view rooms they are in" on public."chat_rooms"
   as permissive
   for select
-  to {public}
+  to public
   using ((EXISTS ( SELECT 1
    FROM chat_participants
   WHERE ((chat_participants.room_id = chat_rooms.id) AND (chat_participants.user_id = auth.uid())))));
@@ -593,25 +593,25 @@ create policy "Users can view rooms they are in" on public."chat_rooms"
 create policy "Follows are viewable by everyone." on public."follows"
   as permissive
   for select
-  to {public}
+  to public
   using (true);
 
 create policy "Users can follow others." on public."follows"
   as permissive
   for insert
-  to {public}
+  to public
   with check ((auth.uid() = follower_id));
 
 create policy "Users can unfollow." on public."follows"
   as permissive
   for delete
-  to {public}
+  to public
   using ((auth.uid() = follower_id));
 
 create policy "Users can read messages in their rooms" on public."messages"
   as permissive
   for select
-  to {public}
+  to public
   using ((EXISTS ( SELECT 1
    FROM chat_participants
   WHERE ((chat_participants.room_id = messages.room_id) AND (chat_participants.user_id = auth.uid())))));
@@ -619,7 +619,7 @@ create policy "Users can read messages in their rooms" on public."messages"
 create policy "Users can send messages to their rooms" on public."messages"
   as permissive
   for insert
-  to {public}
+  to public
   with check (((EXISTS ( SELECT 1
    FROM chat_participants
   WHERE ((chat_participants.room_id = messages.room_id) AND (chat_participants.user_id = auth.uid())))) AND (auth.uid() = sender_id)));
@@ -627,104 +627,104 @@ create policy "Users can send messages to their rooms" on public."messages"
 create policy "users insert their own prefs" on public."notification_preferences"
   as permissive
   for insert
-  to {authenticated}
+  to authenticated
   with check ((auth.uid() = user_id));
 
 create policy "users read their own prefs" on public."notification_preferences"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = user_id));
 
 create policy "users update their own prefs" on public."notification_preferences"
   as permissive
   for update
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = user_id));
 
 create policy "users delete their own notifications" on public."notifications"
   as permissive
   for delete
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = recipient_id));
 
 create policy "users see their own notifications" on public."notifications"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = recipient_id));
 
 create policy "users update their own notifications" on public."notifications"
   as permissive
   for update
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = recipient_id));
 
 create policy "Public profiles are viewable by everyone." on public."profiles"
   as permissive
   for select
-  to {public}
+  to public
   using (true);
 
 create policy "Users can insert their own profile." on public."profiles"
   as permissive
   for insert
-  to {public}
+  to public
   with check ((auth.uid() = id));
 
 create policy "Users can update own profile." on public."profiles"
   as permissive
   for update
-  to {public}
+  to public
   using ((auth.uid() = id));
 
 create policy "users manage their own web subs" on public."web_push_subscriptions"
   as permissive
   for all
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = user_id))
   with check ((auth.uid() = user_id));
 
 create policy "anyone authenticated can read comments" on public."workout_comments"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using (true);
 
 create policy "users can comment on their own behalf" on public."workout_comments"
   as permissive
   for insert
-  to {authenticated}
+  to authenticated
   with check ((auth.uid() = user_id));
 
 create policy "users can delete their own comments" on public."workout_comments"
   as permissive
   for delete
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = user_id));
 
 create policy "anyone authenticated can read likes" on public."workout_likes"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using (true);
 
 create policy "users can like on their own behalf" on public."workout_likes"
   as permissive
   for insert
-  to {authenticated}
+  to authenticated
   with check ((auth.uid() = user_id));
 
 create policy "users can unlike their own likes" on public."workout_likes"
   as permissive
   for delete
-  to {authenticated}
+  to authenticated
   using ((auth.uid() = user_id));
 
 create policy "owner sees full view list" on public."workout_views"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using (((auth.uid() = viewer_id) OR (auth.uid() = ( SELECT workouts.user_id
    FROM workouts
   WHERE (workouts.id = workout_views.workout_id)))));
@@ -732,43 +732,43 @@ create policy "owner sees full view list" on public."workout_views"
 create policy "users record their own views" on public."workout_views"
   as permissive
   for insert
-  to {authenticated}
+  to authenticated
   with check ((auth.uid() = viewer_id));
 
 create policy "Anyone logged in can see workouts" on public."workouts"
   as permissive
   for select
-  to {authenticated}
+  to authenticated
   using (true);
 
 create policy "Users can delete their own workouts." on public."workouts"
   as permissive
   for delete
-  to {public}
+  to public
   using ((auth.uid() = user_id));
 
 create policy "Users can insert their own workouts" on public."workouts"
   as permissive
   for insert
-  to {authenticated}
+  to authenticated
   with check ((auth.uid() = user_id));
 
 create policy "Users can insert their own workouts." on public."workouts"
   as permissive
   for insert
-  to {public}
+  to public
   with check ((auth.uid() = user_id));
 
 create policy "Users can update their own workouts." on public."workouts"
   as permissive
   for update
-  to {public}
+  to public
   using ((auth.uid() = user_id));
 
 create policy "Workouts are viewable by everyone." on public."workouts"
   as permissive
   for select
-  to {public}
+  to public
   using (true);
 
 -- Realtime --------------------------------------------------------------
