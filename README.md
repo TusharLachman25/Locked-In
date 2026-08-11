@@ -58,36 +58,96 @@ a week uncomfortable.
 
 ---
 
-## Running it
+## Running it yourself
+
+There is no APK to download. Every build inlines the credentials of whoever
+built it — including a billable Gemini key, as
+[Known limits](#known-limits) explains — so the only sane way to hand this over
+is the source plus your own keys.
+
+You will need [Node.js](https://nodejs.org) 18 or newer, a free
+[Supabase](https://supabase.com) account, and a
+[Google AI Studio](https://aistudio.google.com/apikey) key for the screenshot
+extraction.
+
+> **One step is missing, and it is the big one.** The database schema is not in
+> this repository — see [The schema](#the-schema) below for the honest reason
+> why. Until it is exported here, steps 1, 2, 4 and 5 will run but the app will
+> fail against an empty database. If you want to stand this up, open an issue
+> and I will export it.
+
+### 1. Get the code
 
 ```bash
+git clone https://github.com/TusharLachman25/Locked-In.git
+cd Locked-In
 npm install
-cp .env.example .env    # then fill it in
-npx expo start
 ```
 
-Then scan the QR with Expo Go, press `w` for web, or `a` for an Android
-emulator. Push notifications and a few other native features only work in real
-builds, not in Expo Go.
+### 2. Create a Supabase project
 
-`.env` is gitignored and holds three values — your own Supabase project URL and
-anon key, and a Gemini API key:
+Sign in to Supabase, click **New project**, set a name, a database password and
+your nearest region. Provisioning takes a minute or two; the free tier is
+enough for a squad.
+
+### 3. Apply the schema — not yet possible
+
+The tables, the row-level security policies on every one of them, the Postgres
+triggers that fire push through `pg_net`, and the `supabase_realtime`
+publication membership all live in my Supabase project rather than in this
+repository. Recreating them by reading the client code would be guesswork, and a
+half-right schema is worse than none — so this step is a placeholder until the
+real dump is committed.
+
+### 4. Fill in your keys
+
+```bash
+cp .env.example .env
+```
+
+Three values, all from consoles you control:
 
 ```
-EXPO_PUBLIC_SUPABASE_URL=
-EXPO_PUBLIC_SUPABASE_ANON_KEY=
-EXPO_PUBLIC_GEMINI_API_KEY=
+EXPO_PUBLIC_SUPABASE_URL=        # Project Settings → API → Project URL
+EXPO_PUBLIC_SUPABASE_ANON_KEY=   # Project Settings → API → anon / public key
+EXPO_PUBLIC_GEMINI_API_KEY=      # aistudio.google.com/apikey
 ```
+
+Never put the Supabase `service_role` key here — it bypasses row-level security,
+and everything in this file is compiled into the client.
 
 The `EXPO_PUBLIC_` prefix means Expo inlines these at build time, on native and
 web alike, so every value here ends up inside the shipped client. That is fine
-for the anon key by design — but it means the key is only ever as safe as the
-row-level security behind it, which is why every table carries policies rather
-than treating the key as a secret.
+for the anon key by design — it is only ever as safe as the row-level security
+behind it, which is why every table carries policies rather than treating the
+key as a secret. It is *not* fine for the Gemini key, which is why you should
+restrict yours in Google Cloud Console to your own Android package name and
+signing certificate before building anything you intend to hand out.
 
 For builds, EAS reads its own environment variables rather than your local
 `.env`; the web build reads Vercel's. A variable has to be added in all three
 places.
+
+### 5. Run it
+
+```bash
+npx expo start
+```
+
+Scan the QR with [Expo Go](https://expo.dev/go), press `w` for web, or `a` for
+an Android emulator. Push notifications and a few other native features only
+work in real builds, not in Expo Go.
+
+### 6. Optional — build your own APK
+
+```bash
+npx eas-cli login
+npx eas-cli build --platform android --profile preview
+```
+
+EAS uploads only git-tracked files and `.env` is gitignored, so set the three
+variables in your EAS project's environment before building — otherwise
+`supabase.ts` throws `Missing Supabase env vars` on launch.
 
 ---
 
